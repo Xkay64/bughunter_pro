@@ -1,0 +1,9 @@
+{
+    "domain": "8.8.8.8",
+    "subdomains": [],
+    "open_ports": [
+        53,
+        443
+    ],
+    "vulnerabilities": []
+}
