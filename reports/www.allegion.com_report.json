@@ -1,0 +1,9 @@
+{
+    "domain": "www.allegion.com",
+    "subdomains": [],
+    "open_ports": [
+        80,
+        443
+    ],
+    "vulnerabilities": []
+}

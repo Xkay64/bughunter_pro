@@ -1,0 +1,14 @@
+{
+  "domain": "testphp.vulnweb.com",
+  "subdomains": [],
+  "open_ports": [
+    80
+  ],
+  "vulnerabilities": {
+    "XSS": [],
+    "SQLi": [
+      "testphp.vulnweb.com"
+    ],
+    "LFI": []
+  }
+}

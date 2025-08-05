@@ -1,187 +1,185 @@
-#!/usr/bin/env python3
 import asyncio
-import nmap
 import requests
-import socket
-import re
-import os
 import json
-import datetime
+import socket
+import nmap
+import os
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
-# ---------------------------
-# Utility: Clean and normalize target
-# ---------------------------
-def normalize_target(target):
-    parsed = urlparse(target)
-    if not parsed.scheme:
-        target = "http://" + target
-        parsed = urlparse(target)
-    return parsed.hostname
+# Create logs directory if not exists
+if not os.path.exists("logs"):
+    os.makedirs("logs")
 
-# ---------------------------
-# Logging
-# ---------------------------
-def log_result(domain, content):
-    os.makedirs("logs", exist_ok=True)
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = f"logs/{domain}_{timestamp}.log"
-    with open(log_file, "w") as log:
-        log.write(content)
-    print(f"[+] Log saved to {log_file}")
-
-# ---------------------------
-# Subdomain Enumeration (Threaded)
-# ---------------------------
-def check_subdomain(sub, domain):
-    subdomain = f"{sub}.{domain}"
-    try:
-        socket.gethostbyname(subdomain)
-        return subdomain
-    except socket.gaierror:
-        return None
-
+# - Subdomain Enumeration (Basic Placeholder) -
 def enumerate_subdomains(domain):
-    print("[1] Enumerating subdomains...")
-    common_subs = ["www", "api", "dev", "test", "staging"]
-    found_subs = []
+    # Placeholder: No real enumeration without API keys or wordlists
+    # Returns common subdomains for demonstration
+    subdomains = [f"www.{domain}", f"api.{domain}"]
+    found_subdomains = []
+    for sub in subdomains:
+        try:
+            socket.gethostbyname(sub)
+            found_subdomains.append(sub)
+        except socket.gaierror:
+            continue
+    return found_subdomains
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(check_subdomain, sub, domain) for sub in common_subs]
-        for future in as_completed(futures):
-            result = future.result()
-            if result:
-                found_subs.append(result)
 
-    print(f"Found {len(found_subs)} subdomains: {found_subs}")
-    return found_subs
-
-# ---------------------------
-# Port Scanning with Nmap
-# ---------------------------
-def scan_ports(target):
-    print("\n[2] Scanning ports...")
+# - Port Scanning -
+def scan_ports(domain):
     nm = nmap.PortScanner()
+    open_ports = []
     try:
-        ip = socket.gethostbyname(target)
+        # Resolve IP
+        ip = socket.gethostbyname(domain)
+        print(f"[INFO] Resolved {domain} -> {ip}")
+
+        # Primary scan
+        print(f"[INFO] Starting primary scan on {ip}...")
+        nm.scan(hosts=ip, arguments="-T4 --top-ports 1000")
+
+
+        if ip in nm.all_hosts():
+            for proto in nm[ip].all_protocols():
+                for port, info in nm[ip][proto].items():
+                    if info['state'] == 'open':
+                        open_ports.append(port)
+
+        # Fallback scan if no open ports found
+        if not open_ports:
+            print("[WARNING] No open ports found. Retrying with -Pn...")
+            nm.scan(hosts=ip, arguments="-Pn -T4 --top-ports 1000")
+
+            if ip in nm.all_hosts():
+                for proto in nm[ip].all_protocols():
+                    for port, info in nm[ip][proto].items():
+                        if info['state'] == 'open':
+                            open_ports.append(port)
+
+        return open_ports
+
     except socket.gaierror:
-        print("[!] Could not resolve target to IP. Skipping port scan.")
+        print(f"[ERROR] Could not resolve domain: {domain}")
+        return []
+    except Exception as e:
+        print(f"[ERROR] Port scan failed: {str(e)}")
         return []
 
-    # Corrected Nmap command
-    nm.scan(hosts=ip, arguments="-Pn -T4 --top-ports 1000")
-    open_ports = []
-    for host in nm.all_hosts():
-        for proto in nm[host].all_protocols():
-            for port, port_data in nm[host][proto].items():
-                if port_data['state'] == "open":
-                    open_ports.append(port)
 
-    print(f"Open ports: {open_ports}")
-    return open_ports
+# - Vulnerability Testing -
+def test_xss(url):
+    payload = "<script>alert('XSS')</script>"
+    try:
+        res = requests.get(url, params={"q": payload}, timeout=5)
+        return payload in res.text
+    except:
+        return False
 
-# ---------------------------
-# Basic Vulnerability Testing (Threaded)
-# ---------------------------
 def test_sqli(url):
-    payloads = ["' OR '1'='1", "' OR 1=1--", "\" OR \"\"=\""]
-    for payload in payloads:
-        try:
-            res = requests.get(url + "?id=" + payload, timeout=5)
-            if re.search(r"sql|mysql|syntax|error", res.text, re.I):
-                return f"SQLi possible with payload: {payload}"
-        except requests.RequestException:
-            continue
-    return None
+    payload = "' OR '1'='1"
+    try:
+        res = requests.get(url, params={"id": payload}, timeout=5)
+        return "error" in res.text.lower() or "syntax" in res.text.lower()
+    except:
+        return False
 
 def test_lfi(url):
-    payloads = ["../../../../etc/passwd", "../../../../windows/win.ini"]
+    payloads = ["../../../../etc/passwd", "..%2f..%2f..%2f..%2fetc%2fpasswd"]
     for payload in payloads:
         try:
-            res = requests.get(url + "?file=" + payload, timeout=5)
-            if "root:x:" in res.text or "[extensions]" in res.text:
-                return f"LFI possible with payload: {payload}"
-        except requests.RequestException:
+            res = requests.get(url, params={"file": payload}, timeout=5)
+            if "root:" in res.text:
+                return True
+        except:
             continue
-    return None
+    return False
 
-def run_vulnerability_tests(url):
-    print("\n[3] Checking for vulnerabilities...")
-    vulnerabilities = []
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = [executor.submit(test_sqli, url), executor.submit(test_lfi, url)]
-        for future in as_completed(futures):
-            result = future.result()
-            if result:
-                vulnerabilities.append(result)
+# - Reporting -
+def save_reports(domain, subdomains, open_ports, vulnerabilities):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_filename = f"logs/{domain}_{timestamp}.log"
 
-    return vulnerabilities
+    # Log output
+    with open(log_filename, "w") as log_file:
+        log_file.write(f"Scan results for {domain}\n")
+        log_file.write(f"Subdomains: {subdomains}\n")
+        log_file.write(f"Open ports: {open_ports}\n")
+        log_file.write(f"Vulnerabilities: {json.dumps(vulnerabilities, indent=2)}\n")
 
-# ---------------------------
-# Reporting
-# ---------------------------
-def generate_reports(domain, subdomains, ports, vulnerabilities):
-    os.makedirs("reports", exist_ok=True)
-    report_data = {
-        "domain": domain,
-        "subdomains": subdomains,
-        "open_ports": ports,
-        "vulnerabilities": vulnerabilities
-    }
+    # JSON report
+    json_filename = f"logs/{domain}_{timestamp}.json"
+    with open(json_filename, "w") as json_file:
+        json.dump({
+            "domain": domain,
+            "subdomains": subdomains,
+            "open_ports": open_ports,
+            "vulnerabilities": vulnerabilities
+        }, json_file, indent=2)
 
-    # JSON
-    with open(f"reports/{domain}_report.json", "w") as f:
-        json.dump(report_data, f, indent=4)
+    # Markdown report
+    md_filename = f"logs/{domain}_{timestamp}.md"
+    with open(md_filename, "w") as md_file:
+        md_file.write(f"# Bug Hunter Report: {domain}\n\n")
+        md_file.write(f"**Subdomains:** {', '.join(subdomains)}\n\n")
+        md_file.write(f"**Open Ports:** {open_ports}\n\n")
+        md_file.write("**Vulnerabilities:**\n")
+        for vuln_type, results in vulnerabilities.items():
+            md_file.write(f"- {vuln_type}: {results}\n")
 
-    # Markdown
-    with open(f"reports/{domain}_report.md", "w") as f:
-        f.write(f"# Bug Hunter Report for {domain}\n\n")
-        f.write(f"**Subdomains:** {subdomains}\n\n")
-        f.write(f"**Open Ports:** {ports}\n\n")
-        f.write("**Vulnerabilities:**\n")
-        for v in vulnerabilities:
-            f.write(f"- {v}\n")
+    # HTML report
+    html_filename = f"logs/{domain}_{timestamp}.html"
+    with open(html_filename, "w") as html_file:
+        html_file.write(f"<html><head><title>Bug Hunter Report for {domain}</title></head><body>")
+        html_file.write(f"<h1>Scan results for {domain}</h1>")
+        html_file.write(f"<p><strong>Subdomains:</strong> {', '.join(subdomains)}</p>")
+        html_file.write(f"<p><strong>Open Ports:</strong> {open_ports}</p>")
+        html_file.write("<h2>Vulnerabilities:</h2><ul>")
+        for vuln_type, results in vulnerabilities.items():
+            html_file.write(f"<li>{vuln_type}: {results}</li>")
+        html_file.write("</ul></body></html>")
 
-    # HTML
-    with open(f"reports/{domain}_report.html", "w") as f:
-        f.write("<html><head><title>Bug Hunter Report</title></head><body>")
-        f.write(f"<h1>Report for {domain}</h1>")
-        f.write(f"<h2>Subdomains</h2><p>{subdomains}</p>")
-        f.write(f"<h2>Open Ports</h2><p>{ports}</p>")
-        f.write("<h2>Vulnerabilities</h2><ul>")
-        for v in vulnerabilities:
-            f.write(f"<li>{v}</li>")
-        f.write("</ul></body></html>")
-
+    print(f"[+] Log saved to {log_filename}")
     print(f"[+] Reports generated for {domain} in JSON, Markdown, and HTML.")
 
-# ---------------------------
-# Main Async Flow
-# ---------------------------
+
+# - Main Async Flow -
 async def main():
-    target = input("Enter target (domain or URL): ").strip()
-    domain = normalize_target(target)
+    domain = input("Enter target (domain or URL): ").strip()
+    domain = domain.replace("http://", "").replace("https://", "").split("/")[0]
 
+    print("[1] Enumerating subdomains...")
     subdomains = enumerate_subdomains(domain)
+    print(f"Found {len(subdomains)} subdomains: {subdomains}\n")
+
+    print("[2] Scanning ports...")
     open_ports = scan_ports(domain)
-    vulnerabilities = run_vulnerability_tests(target)
+    print(f"Open ports: {open_ports}\n")
 
-    # Combine results for logging
-    log_content = (
-        f"Target: {target}\n"
-        f"Subdomains: {subdomains}\n"
-        f"Open Ports: {open_ports}\n"
-        f"Vulnerabilities: {vulnerabilities}\n"
-    )
-    log_result(domain, log_content)
+    print("[3] Checking for vulnerabilities...")
+    vulnerabilities = {"XSS": [], "SQLi": [], "LFI": []}
 
-    generate_reports(domain, subdomains, open_ports, vulnerabilities)
+    for sub in subdomains or [domain]:
+        url = f"http://{sub}"
+        if test_xss(url):
+            vulnerabilities["XSS"].append(sub)
+        if test_sqli(url):
+            vulnerabilities["SQLi"].append(sub)
+        if test_lfi(url):
+            vulnerabilities["LFI"].append(sub)
 
-# ---------------------------
-# Run
-# ---------------------------
+    # Display summary
+    print(f"Scan results for {domain}")
+    print(f"Subdomains: {subdomains}")
+    print(f"Open ports: {open_ports}")
+    print(f"Vulnerabilities: {json.dumps(vulnerabilities, indent=2)}\n")
+    print("=== SUMMARY OF CRITICAL FINDINGS ===")
+    if not any(vulnerabilities.values()):
+        print("No critical vulnerabilities found.")
+
+    save_reports(domain, subdomains, open_ports, vulnerabilities)
+
+
 if __name__ == "__main__":
     asyncio.run(main())

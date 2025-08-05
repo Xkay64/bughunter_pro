@@ -1,0 +1,15 @@
+{
+  "domain": "Allegion.com",
+  "subdomains": [
+    "www.Allegion.com",
+    "api.Allegion.com"
+  ],
+  "open_ports": [],
+  "vulnerabilities": {
+    "XSS": [],
+    "SQLi": [
+      "api.Allegion.com"
+    ],
+    "LFI": []
+  }
+}
